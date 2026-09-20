@@ -1,0 +1,19 @@
+# Used by images/Dockerfile (BuildKit reads <Dockerfile>.dockerignore next to it). Keeps the build context small and free of secrets.
+# .myenv holds a personal access token in plain text -- never send it to the daemon.
+.git
+.myenv
+mynets
+**/target
+todos
+*.log
+build.output
+build-output.txt
+.idea
+.vscode
+*.iml
+.DS_Store
+
+# Only entrypoint.sh is needed from images/ (by the runtime stage). Excluding the rest means
+# editing the Dockerfile or Makefile does not invalidate the COPY . . layer (the Maven build).
+images/*
+!images/entrypoint.sh

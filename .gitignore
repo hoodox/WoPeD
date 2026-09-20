@@ -104,4 +104,6 @@ build.output
 ##############################
 ## Local environment
 ##############################
-.myenv/
+.myenv/*
+!.myenv/local.example
+mynets/
