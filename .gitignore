@@ -100,3 +100,8 @@ woped.log
 ##############################
 build-output.txt
 build.output
+
+##############################
+## Local environment
+##############################
+.myenv/
