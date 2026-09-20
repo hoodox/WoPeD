@@ -32,7 +32,7 @@ endif
 
 SHELL       := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
-.PHONY: help build run up down logs
+.PHONY: help build run up down logs local-build local
 
 # Load the env file silently (the existing .myenv/local echoes a token when sourced), require
 # XPRA_PASSWORD, and resolve + create the host nets folder as $nets.
@@ -47,6 +47,20 @@ PREPARE = pre_pw="$${XPRA_PASSWORD-}"; pre_nets="$${WOPED_NETS_DIR-}"; \
   nets="$${WOPED_NETS_DIR:-$(WOPED_DEFAULT_NETS_DIR)}"; case "$$nets" in /*) ;; *) nets="$(REPO_ROOT)/$$nets";; esac; \
   mkdir -p "$$nets"
 
+# Shell snippet that sets $$f to a Maven settings file holding the GitHub token: WOPED_M2_SETTINGS if
+# given, else a temporary mode-600 file generated from `gh auth token` and removed when the shell exits.
+SETTINGS = f="$(WOPED_M2_SETTINGS)"; \
+  if [ -z "$$f" ]; then \
+    command -v gh >/dev/null || { echo "gh not found: install it or pass WOPED_M2_SETTINGS=<settings.xml>" >&2; exit 1; }; \
+    f=$$(mktemp); trap 'rm -f "$$f"' EXIT; \
+    printf '<settings><servers><server><id>github</id><username>%s</username><password>%s</password></server></servers></settings>\n' \
+      "$$(gh api user --jq .login)" "$$(gh auth token)" > "$$f"; \
+  fi
+
+# Modules the image (and local build) do not need: the Installer calls cmd.exe, UnitTests are tests.
+MVN_MODULES = '!WoPeD-Installer,!WoPeD-UnitTests'
+LOCAL_JAR   = $(REPO_ROOT)/WoPeD-Starter/target/WoPeD-Starter-*-jar-with-dependencies.jar
+
 RUN_ARGS = --rm --name $(WOPED_CONTAINER) -e XPRA_PASSWORD \
   -v "$$nets:/nets" -v "$(WOPED_HOME_VOLUME):/home/woped" -p $(WOPED_BIND):$(WOPED_PORT):14500 $(WOPED_IMAGE)
 
@@ -57,6 +71,8 @@ help:
 	  'make up      run in the background' \
 	  'make down    stop the background container' \
 	  'make logs    follow the container log' \
+	  'make local-build  build the jar with your own Maven (no Docker)' \
+	  'make local        run WoPeD directly on this machine (no Docker, no Xpra), builds first if needed' \
 	  '' \
 	  'Variables (override like: make up WOPED_PORT=14600):' \
 	  '  WOPED_IMAGE=$(WOPED_IMAGE)  WOPED_JAVA_VERSION=$(WOPED_JAVA_VERSION)  WOPED_PORT=$(WOPED_PORT)  WOPED_BIND=$(WOPED_BIND)  WOPED_CONTAINER=$(WOPED_CONTAINER)' \
@@ -65,13 +81,7 @@ help:
 	  '  WOPED_ENV_FILE=$(WOPED_ENV_FILE)   (must export XPRA_PASSWORD, see .myenv/local.example)'
 
 build:
-	@f="$(WOPED_M2_SETTINGS)"; \
-	if [ -z "$$f" ]; then \
-	  command -v gh >/dev/null || { echo "gh not found: install it or pass WOPED_M2_SETTINGS=<settings.xml>" >&2; exit 1; }; \
-	  f=$$(mktemp); trap 'rm -f "$$f"' EXIT; \
-	  printf '<settings><servers><server><id>github</id><username>%s</username><password>%s</password></server></servers></settings>\n' \
-	    "$$(gh api user --jq .login)" "$$(gh auth token)" > "$$f"; \
-	fi; \
+	@$(SETTINGS); \
 	DOCKER_BUILDKIT=1 docker build -f "$(MAKEFILE_DIR)Dockerfile" --secret id=m2settings,src="$$f" \
 	  --build-arg JAVA_VERSION=$(WOPED_JAVA_VERSION) --build-arg WOPED_UID=$(HOST_UID) --build-arg WOPED_GID=$(HOST_GID) \
 	  -t $(WOPED_IMAGE) "$(REPO_ROOT)"
@@ -91,3 +101,22 @@ down:
 
 logs:
 	@docker logs -f $(WOPED_CONTAINER)
+
+local-build:
+	@command -v mvn >/dev/null || { echo "mvn not found: install Maven 3.9+ and a JDK 11 or newer" >&2; exit 1; }; \
+	$(SETTINGS); \
+	cd "$(REPO_ROOT)" && mvn -B -s "$$f" install -DskipTests -pl $(MVN_MODULES)
+
+# Plain desktop launch on this machine: no password, no /nets mount, WoPeD uses ~/.WoPeD-<version>/.
+local:
+	@if [ -z "$${DISPLAY:-}" ] && [ -z "$${WAYLAND_DISPLAY:-}" ]; then \
+	  echo "No display (DISPLAY/WAYLAND_DISPLAY unset). On WSL you need WSLg. Or run it in a browser: make up" >&2; exit 1; fi; \
+	command -v java >/dev/null || { echo "java not found: install a JDK/JRE 11 or newer" >&2; exit 1; }; \
+	jar=$$(ls $(LOCAL_JAR) 2>/dev/null | head -1 || true); \
+	if [ -z "$$jar" ]; then \
+	  $(MAKE) --no-print-directory local-build; \
+	  jar=$$(ls $(LOCAL_JAR) 2>/dev/null | head -1 || true); \
+	fi; \
+	[ -n "$$jar" ] || { echo "WoPeD jar not found after the build: $(LOCAL_JAR)" >&2; exit 1; }; \
+	echo "Starting WoPeD from $$jar (Ctrl-C to stop). Nets folder to browse to: $(WOPED_DEFAULT_NETS_DIR)"; \
+	cd "$(REPO_ROOT)" && exec java -Dawt.useSystemAAFontSettings=on -jar "$$jar"

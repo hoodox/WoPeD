@@ -156,6 +156,15 @@ Design (all in `images/Makefile`):
   testing): `WOPED_IMAGE=woped-xpra`, `WOPED_JAVA_VERSION=17`, `WOPED_PORT=14500`,
   `WOPED_BIND=127.0.0.1`, `WOPED_CONTAINER=woped`, `WOPED_HOME_VOLUME=woped-home`,
   `WOPED_ENV_FILE=<repo>/.myenv/local`, `WOPED_M2_SETTINGS` (optional settings.xml override).
+- **Running without the image (`local-build`, `local`):** `local-build` runs the same Maven build
+  as the image (`-pl '!WoPeD-Installer,!WoPeD-UnitTests'`, the Installer needs `cmd.exe`) with the
+  host's `mvn`, passing the same temporary GitHub token file via `mvn -s`. `local` starts the fat
+  jar with the host's `java` (same `-Dawt.useSystemAAFontSettings=on`), building first if no jar
+  exists. It is a plain desktop launch: no Xpra, no password, no `/nets` mount; WoPeD then uses
+  its normal settings folder `~/.WoPeD-<version>/` on the host, and `<repo>/mynets` is simply a
+  folder to browse to. It refuses to start without a display (`DISPLAY`/`WAYLAND_DISPLAY`, WSLg on
+  WSL) or without `java`/`mvn`. The token-file generation is factored into one shell snippet shared
+  by `build` and `local-build`, so `build` must be re-tested after the refactor.
 - **Nets folder:** default `<repo>/mynets` (`WOPED_DEFAULT_NETS_DIR`). It can be set with
   `WOPED_NETS_DIR` in `.myenv/local`, or on the command line. It is resolved in the shell
   *after* the env file is loaded (a make-time variable could not see the file). Precedence:
@@ -182,7 +191,7 @@ Design (all in `images/Makefile`):
 
 ## Scope
 
-In: `images/Dockerfile`, `images/Dockerfile.dockerignore`, `images/entrypoint.sh`, `images/Makefile`, `.myenv/local.example` and `images/README.md` (added 2026-09-20 at user request), a default nets folder `<repo>/mynets/`, and (added 2026-09-20 at user request) an optional extra host folder for nets, mounted at `/nets`, with WoPeD's default nets folder left untouched.
+In: `images/Dockerfile`, `images/Dockerfile.dockerignore`, `images/entrypoint.sh`, `images/Makefile` (including `local-build`/`local` targets that run WoPeD without Docker), `.myenv/local.example` and `images/README.md` (added 2026-09-20 at user request), a default nets folder `<repo>/mynets/`, and (added 2026-09-20 at user request) an optional extra host folder for nets, mounted at `/nets`, with WoPeD's default nets folder left untouched.
 Out: docker-compose, TLS/reverse proxy, multi-user session management, CI image
 publishing, any change to WoPeD Java code. Default is **one container = one
 session** (Xpra's own password protects it).
@@ -239,6 +248,8 @@ sequenceDiagram
 11. Create `images/Makefile` per the Makefile subsection in Approach.
 12. Create `.myenv/local.example`; add `mynets/` to `.gitignore` and `images/Dockerfile.dockerignore`; change `.gitignore`'s `.myenv/` to `.myenv/*` + `!.myenv/local.example`.
 13. Verify the Makefile (Verification, "Makefile").
+15. `images/Makefile`: factor the token-file generation into a shared `SETTINGS` snippet; add `local-build` and `local` targets and list them in `help`; re-test `build`.
+16. `images/README.md`: document `local-build`/`local` ("Running without Docker"), the side effects and the limits.
 14. Write `images/README.md`: what it is, requirements, quick start, settings, targets/variables, nets folder, Java version, plain-docker commands, security notes, troubleshooting. Only document behaviour verified in this plan. (It is excluded from the Docker build context by the `images/*` ignore rule, so editing it never triggers a rebuild.)
 
 ## Verification
@@ -280,6 +291,12 @@ Makefile (added 2026-09-20):
 - With a temporary `WOPED_ENV_FILE` (a fake secret in an `echo` line, a test password, a `WOPED_NETS_DIR`): neither the fake secret nor the password appears in `make` output, the container receives the password, `/nets` is mounted from that folder, no-password clients are rejected. A `WOPED_NETS_DIR=` on the command line beats the file; with neither, the folder is `<repo>/mynets`. With the real `.myenv/local`, the GitLab token it echoes is not in the `make` output.
 - `make -C images down` removes the container. `make -C images build` succeeds and reuses the Maven layer on a second run after touching only `images/Makefile`.
 
+Without Docker (added 2026-09-20): `make -C images local-build` succeeds with the host `mvn`
+(temporary token file removed afterwards); `make -C images local` starts a `java -jar ...
+jar-with-dependencies.jar` process that stays alive and logs no exceptions (window viewing left to
+the user); with no display it refuses with a clear message; with no jar it builds first; `make
+build` still works after the refactor.
+
 Expected:
 0. Repeat the whole list with `--build-arg JAVA_VERSION=21` (and 25 if desired) and note pass/fail per version in `## Status`. Default stays 17 unless a newer one passes cleanly.
 1. Build succeeds; `docker history woped-xpra` shows no token and the image contains no `.myenv` (`docker run --rm --entrypoint ls woped-xpra -a /opt/woped`).
@@ -292,6 +309,7 @@ Expected:
 
 - **Bind-mount permissions:** the container user (default uid/gid 1000, verified in the image) must be able to write the host folder. If the host user is not 1000, build with `--build-arg WOPED_UID=$(id -u) --build-arg WOPED_GID=$(id -g)`. A `-v` to a missing host path makes Docker create it root-owned: `mkdir` it first (or use `--mount type=bind`, which errors instead).
 - **Dialogs still start in the default folder** until the home directory is set to `/nets` in WoPeD's Configuration; nets already saved in the default folder are not moved.
+- **`local-build` / `local` change the host, not a container:** they fill the host's `~/.m2/repository`, `local` creates `~/.WoPeD-<version>/` and `woped.log` (git-ignored) in the repo root, the host JDK may differ from CI's 17, and nothing isolates the app.
 - **`.myenv/local` echoes a secret when sourced** (existing file): the Makefile discards its output; do not `source` it in a terminal where output is logged. The file is mode 644 (world-readable): `chmod 600` it. `build` needs `gh` logged in with `read:packages` (or `M2_SETTINGS`).
 - **Newer JDK breaks at build or runtime** (removed/encapsulated APIs, old plugins): keep the default at 17, which CI proves.
 - **Blank/grey Swing window** under Xpra without a window manager: add
@@ -342,3 +360,6 @@ Expected:
 - 2026-09-20 (WoPeD fork): IN PROGRESS — Makefile, `.myenv/local.example` and default folder `<repo>/mynets` implemented and verified. **Makefile:** `help` lists targets/variables. Missing `XPRA_PASSWORD` (checked with the user's real `.myenv/local`) fails with a clear message, starts nothing, creates no folder, and the GitLab token that file echoes does not appear in the output. With a temporary env file (fake secret in an `echo`, test password, `WOPED_NETS_DIR`): password and fake secret absent from `make` output, container env password matches, only `XPRA_PASSWORD` is forwarded (no GITLAB vars), `/nets` mounted from the file's folder, file written in the container appears on the host, no-password client rejected and right password accepted, port bound to `127.0.0.1` only. Precedence checked: command line beats env file. Default (nothing configured) mounts `<repo>/mynets`; a relative path resolves against the repo root; `mynets/` is invisible to git. `make down` stops the container. **`make build`:** succeeds with the temporary token file generated from `gh` and removed afterwards (none left in `/tmp`). **Cache:** after adding `images/*` / `!images/entrypoint.sh` to the ignore file, changing only `images/Makefile` rebuilds in 2 s (Maven layer cached) instead of ~4 min. `woped-xpra:latest` = current build. NOT verified: the user's own password in their real `.myenv/local` (they have not added `XPRA_PASSWORD` yet) and the browser step (setting `/nets` as home directory).
 - 2026-09-20 (WoPeD fork): IN PROGRESS — user asked for a README in `images/`. Plan updated first (Scope, Implementation 14); README documents only verified behaviour.
 - 2026-09-20 (WoPeD fork): IN PROGRESS — `images/README.md` written and checked against the real files: every `WOPED_*` variable it names exists in the Makefile, the Java 21 command (`WOPED_JAVA_VERSION=21 WOPED_IMAGE=...:21`) and the `WOPED_M2_SETTINGS` override resolve correctly in a `make -n` dry run (also from inside `images/`), all referenced files exist, and editing only the README rebuilds in 3 s with the Maven layer cached (README is excluded from the build context by the `images/*` ignore rule). Remaining before DONE: user confirms the browser UI, and the `/nets` home-directory step.
+- 2026-09-20 (WoPeD fork): IN PROGRESS — user asked for a make target to run WoPeD without the image. Read as: run it directly on the host (Maven + Java, no Docker/Xpra). Plan updated first (Scope, Approach, Implementation 15-16, Verification, Risks).
+- 2026-09-20 (WoPeD fork): IN PROGRESS — verification of `local` found a defect: with no jar present, `make local` exited silently instead of building first. Cause: the Makefile shell runs with `-e -o pipefail`, so `jar=$(ls <jar-glob> | head -1)` fails when `ls` finds nothing and aborts the recipe before the "build first" branch. Fix: tolerate the failed `ls` in the detection (`|| true`), then, after building, require a jar and print a clear error if there is still none. Verified so far: `local-build` (host mvn, temp token file removed), `local` with a jar (real `WoPeD 3.9.4` window on the display via `xwininfo`, no exceptions), no-display refusal, missing-mvn message, `build` regression (3 s).
+- 2026-09-20 (WoPeD fork): IN PROGRESS — `local-build` / `local` finished and verified after the jar-detection fix. `local-build`: host `mvn` build succeeds, temp token file removed. `local` with a jar: java process stays up, a `WoPeD 3.9.4` window is on the display (`xwininfo`), 0 exceptions in `woped.log`, clean exit on kill (re-verified after the fix). No jar: calls `mvn -B -s <temp settings> install -DskipTests -pl '!WoPeD-Installer,!WoPeD-UnitTests'` (stub mvn), then errors clearly if still no jar. No display: refuses with a message. `mvn` missing: clear message. `make build` unaffected by the refactor (3 s, cached). Test artifacts on the host (`~/.WoPeD-3.9.4`, `woped.log`) removed; `~/.m2/repository` now holds the downloaded dependencies. README updated ("Running without Docker", targets table, requirements). Still open: user confirms the browser UI and the `/nets` home-directory step, then DONE.

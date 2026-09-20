@@ -35,7 +35,7 @@ Your nets are saved to `<repo>/mynets` on the host (see "Saving nets on the host
   `gh auth refresh -h github.com -s read:packages`. Or pass your own Maven settings file:
   `make -C images build WOPED_M2_SETTINGS=/path/to/settings.xml` (it needs a `github` server
   entry with a token that has `read:packages`).
-- To **run**: nothing but Docker and the image.
+- To **run in the browser**: nothing but Docker and the image. To **run without Docker**, see "Running without Docker".
 
 ## Settings
 
@@ -64,6 +64,8 @@ Run them from anywhere with `make -C images <target>` (or `cd images` first).
 | `up` | Run in the background and print the URL. |
 | `down` | Stop the background container. |
 | `logs` | Follow the container log. |
+| `local-build` | Build the jar with **your own** Maven, no Docker (see "Running without Docker"). |
+| `local` | Run WoPeD directly on this machine, no Docker and no Xpra. Builds first if there is no jar. |
 | `help` | List targets and current variable values. |
 
 Variables (override on the command line, e.g. `make -C images up WOPED_PORT=14600`):
@@ -106,6 +108,30 @@ WoPeD fine (only startup was tested, not every feature); Java 25 was not tried.
 make -C images build WOPED_JAVA_VERSION=21 WOPED_IMAGE=woped-xpra:21
 make -C images up    WOPED_IMAGE=woped-xpra:21
 ```
+
+## Running without Docker
+
+`make -C images local` starts WoPeD as a normal desktop app on your own machine, using your own
+Java. It builds the jar first if there is none (`make -C images local-build` builds it explicitly,
+and is how you rebuild after changing the code).
+
+```bash
+make -C images local
+```
+
+What you need: Maven 3.9+, a JDK/JRE 11 or newer (the project's CI uses 17; 21 was used to test this),
+`gh` logged in with `read:packages` for the first build (or `WOPED_M2_SETTINGS`), and a display
+(`DISPLAY` or `WAYLAND_DISPLAY`, which WSLg provides on WSL). It refuses to start with a clear message
+if one is missing.
+
+How it differs from the browser setup:
+
+- **No password, no Xpra, no isolation.** It is an ordinary local desktop program.
+- **No `/nets` mount.** WoPeD uses its normal settings folder `~/.WoPeD-<version>/` on your machine.
+  `<repo>/mynets` is just a folder you can browse to in the Open/Save dialogs.
+- **It changes your machine, not a container:** the build fills `~/.m2/repository`, and running it
+  creates `~/.WoPeD-<version>/` plus a `woped.log` in the repo root (git-ignored).
+- The build skips `WoPeD-Installer` and `WoPeD-UnitTests`, like the image does.
 
 ## Without make
 
@@ -151,7 +177,7 @@ docker run --rm -e XPRA_PASSWORD -v "$PWD/mynets:/nets" -v woped-home:/home/wope
 |---|---|
 | `Dockerfile` | Two stages: a Maven + JDK build of WoPeD, then a slim runtime with a JRE, Xpra and the fat jar. |
 | `entrypoint.sh` | Refuses to start without a password, warns if `/nets` is not writable, starts Xpra and WoPeD. |
-| `Makefile` | The commands above. |
+| `Makefile` | The commands above, including running without Docker. |
 | `Dockerfile.dockerignore` | Keeps the build context small and secret-free, and keeps edits to these files from re-running the ~4 minute Maven build. |
 
 How the build works: the Maven build skips two modules the image does not need, `WoPeD-Installer`
