@@ -12,6 +12,8 @@ One container is one WoPeD session. Closing WoPeD stops the container.
 
 ## Quick start
 
+Run these from the repo root (`-C images` is explained under "Make targets").
+
 ```bash
 # 1. Put your password in .myenv/local (see "Settings" below)
 echo "export XPRA_PASSWORD='choose-a-password'" >> .myenv/local
@@ -55,7 +57,15 @@ A value given on the command line or in your environment beats the file, which b
 
 ## Make targets
 
-Run them from anywhere with `make -C images <target>` (or `cd images` first).
+`-C images` tells `make` to change into the `images` folder before it looks for the `Makefile`
+(`-C` is short for `--directory`). It lets you run every target from the repo root without
+`cd`-ing first, and the Makefile works out the repo root itself, so it also works from anywhere
+else, for example `make -C /path/to/WoPeD/images up`. These two are equivalent:
+
+```bash
+make -C images up          # from the repo root
+cd images && make up       # from inside the folder
+```
 
 | Target | What it does |
 |---|---|
